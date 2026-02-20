@@ -1,52 +1,47 @@
 {
-	"name": "workers-for-platforms-template",
-	"private": true,
-	"description": "Build your own website hosting platform with Workers for Platforms. Users can create and deploy sites through a simple web interface.",
-	"license": "Apache-2.0",
-	"engines": {
-		"node": ">=18"
-	},
-	"devDependencies": {
-		"@cloudflare/vitest-pool-workers": "^0.5.30",
-		"@cloudflare/workers-types": "^4.20241205.0",
-		"@types/node": "^25.3.0",
-		"typescript": "^5.0.0",
-		"vitest": "^2.1.8",
-		"wrangler": "^4.67.0"
-	},
-	"scripts": {
-		"dev": "wrangler dev --remote",
-		"build": "node scripts/setup-quick.js",
-		"deploy": "wrangler deploy && node scripts/setup-quick.js --set-secrets",
-		"setup": "node scripts/setup.js",
-		"setup:quick": "node scripts/setup-quick.js",
-		"test": "vitest run",
-		"test:watch": "vitest"
-	},
-	"dependencies": {
-		"hono": "^4.2.1",
-		"workers-qb": "^0.1.1"
-	},
+	"name": "react-router-hono-fullstack-template",
+	"description": "A modern full-stack template powered by Cloudflare Workers, using Hono for backend APIs, React Router for frontend routing, and shadcn/ui for beautiful, accessible components styled with Tailwind CSS",
 	"cloudflare": {
-		"label": "Website Builder",
+		"label": "React Router + Hono Fullstack App",
 		"products": [
-			"Workers",
-			"Workers for Platforms",
-			"D1"
+			"Workers"
 		],
 		"categories": [
 			"starter"
 		],
-		"preview_icon_url": "https://imagedelivery.net/wSMYJvS3Xw-n339CbDyDIA/7ee998bb-6d98-43ab-dd7f-3f2d85a89c00/public",
-		"preview_image_url": "https://imagedelivery.net/wSMYJvS3Xw-n339CbDyDIA/0c5e578d-ad97-4efa-fb3d-f8f4ac7e1700/preview",
-		"publish": true,
-		"bindings": {
-			"CUSTOM_DOMAIN": {
-				"description": "(Optional) Your platform's domain, e.g. `myplatform.com`. Leave empty to use workers.dev"
-			},
-			"CLOUDFLARE_API_TOKEN": {
-				"description": "(Optional) API token with **SSL and Certificates Edit** permission for custom domain support. [Create token](https://dash.cloudflare.com/profile/api-tokens)"
-			}
-		}
-	}
+		"docs_url": "https://developers.cloudflare.com/workers",
+		"preview_icon_url": "https://imagedelivery.net/wSMYJvS3Xw-n339CbDyDIA/d3db20ee-c3bf-4b5c-f1ed-d86021359e00/public",
+		"preview_image_url": "https://imagedelivery.net/wSMYJvS3Xw-n339CbDyDIA/56caa8a9-d3ab-4ac6-32a9-6a5fc686e000/preview",
+		"publish": true
+	},
+	"dependencies": {
+		"hono": "4.11.1",
+		"isbot": "5.1.32",
+		"react": "19.2.1",
+		"react-dom": "19.2.1",
+		"react-router": "7.9.6"
+	},
+	"devDependencies": {
+		"@cloudflare/vite-plugin": "1.15.3",
+		"@react-router/dev": "7.9.6",
+		"@tailwindcss/vite": "4.1.17",
+		"@types/node": "^24.10.1",
+		"@types/react": "19.2.7",
+		"@types/react-dom": "19.2.3",
+		"tailwindcss": "4.1.17",
+		"typescript": "5.9.3",
+		"vite": "^6.0.0",
+		"vite-tsconfig-paths": "5.1.4",
+		"wrangler": "^4.67.0"
+	},
+	"private": true,
+	"scripts": {
+		"build": "react-router build",
+		"cf-typegen": "wrangler types",
+		"deploy": "npm run build && wrangler deploy",
+		"dev": "react-router dev",
+		"preview": "npm run build && vite preview",
+		"typecheck": "npm run cf-typegen && react-router typegen && tsc -b"
+	},
+	"type": "module"
 }

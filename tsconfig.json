@@ -1,18 +1,15 @@
 {
+	"files": [],
+	"references": [
+		{ "path": "./tsconfig.node.json" },
+		{ "path": "./tsconfig.cloudflare.json" }
+	],
 	"compilerOptions": {
-		"target": "es2021",
-		"lib": ["es2021"],
-		"module": "es2022",
-		"moduleResolution": "node",
-		"types": ["@cloudflare/workers-types"],
-		"resolveJsonModule": true,
-		"allowJs": true,
 		"checkJs": true,
-		"noEmit": true,
-		"isolatedModules": true,
-		"allowSyntheticDefaultImports": true,
-		"forceConsistentCasingInFileNames": true,
+		"verbatimModuleSyntax": true,
+		"skipLibCheck": true,
 		"strict": true,
-		"skipLibCheck": true
+		"noEmit": true,
+		"types": ["@cloudflare/workers-types/2023-07-01"]
 	}
 }
