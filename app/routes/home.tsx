@@ -1,17 +1,18 @@
 import type { Route } from "./+types/home";
 import { Welcome } from "../welcome/welcome";
+import { ConfigurationPage } from "../configuration/configuration";
 
 export function meta({}: Route.MetaArgs) {
 	return [
-		{ title: "New React Router App" },
-		{ name: "description", content: "Welcome to React Router!" },
+		{ title: "Crowdsec remediation component for Cloudflare Workers" },
+		{ name: "description", content: "Deploy your Crowdsec remediation component for Cloudflare Workers" },
 	];
 }
 
 export function loader({ context }: Route.LoaderArgs) {
-	return { message: context.cloudflare.env.VALUE_FROM_CLOUDFLARE };
+	return {  };
 }
 
 export default function Home({ loaderData }: Route.ComponentProps) {
-	return <Welcome message={loaderData.message} />;
+	return <ConfigurationPage />;
 }
