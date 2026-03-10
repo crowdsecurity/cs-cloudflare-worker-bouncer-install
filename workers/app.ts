@@ -1,4 +1,5 @@
 import { Hono } from "hono";
+import { upgradeWebSocket } from "hono/cloudflare-workers";
 import { createRequestHandler } from "react-router";
 import { createCloudflareClient, extractErrorMessage } from "./services/cloudflare/client.js";
 import { discoverZones } from "./services/cloudflare/zones.js";
@@ -25,6 +26,8 @@ function extractToken(authHeader: string | undefined): string | null {
 	return authHeader?.startsWith("Bearer ") ? authHeader.slice(7) : null;
 }
 
+type ProgressCallback = (step: string, status: "info" | "success" | "error") => void;
+
 async function cleanupInfrastructure(
 	client: CloudflareClient,
 	accountId: string,
@@ -35,6 +38,86 @@ async function cleanupInfrastructure(
 	await deleteWorkerScripts(client, accountId, [RESOURCE_NAMES.MAIN_WORKER, RESOURCE_NAMES.SYNC_WORKER]);
 	await findAndDeleteKVNamespace(client, accountId);
 	await findAndDeleteD1Database(client, accountId);
+}
+
+async function cleanupInfrastructureWithProgress(
+	client: CloudflareClient,
+	accountId: string,
+	zones: ZoneState[],
+	progress: ProgressCallback,
+): Promise<void> {
+	progress("Deleting Turnstile widgets", "info");
+	await deleteTurnstileWidgets(client, accountId);
+	progress("Turnstile widgets deleted", "success");
+
+	progress("Deleting worker routes", "info");
+	await deleteWorkerRoutes(client, zones, RESOURCE_NAMES.MAIN_WORKER);
+	progress("Worker routes deleted", "success");
+
+	progress("Deleting worker scripts", "info");
+	await deleteWorkerScripts(client, accountId, [RESOURCE_NAMES.MAIN_WORKER, RESOURCE_NAMES.SYNC_WORKER]);
+	progress("Worker scripts deleted", "success");
+
+	progress("Deleting KV namespace", "info");
+	await findAndDeleteKVNamespace(client, accountId);
+	progress("KV namespace deleted", "success");
+
+	progress("Deleting D1 database", "info");
+	await findAndDeleteD1Database(client, accountId);
+	progress("D1 database deleted", "success");
+}
+
+async function deployInfrastructureWithProgress(
+	client: CloudflareClient,
+	accountId: string,
+	zones: ZoneState[],
+	crowdsecApiUrl: string,
+	crowdsecApiKey: string,
+	apiToken: string,
+	progress: ProgressCallback,
+): Promise<void> {
+	await cleanupInfrastructureWithProgress(client, accountId, zones, progress);
+
+	progress("Creating KV namespace", "info");
+	const kvNamespaceId = await createKVNamespace(client, accountId);
+	progress("KV namespace created", "success");
+
+	progress("Creating D1 database", "info");
+	const d1DatabaseId = await createD1Database(client, accountId);
+	progress("D1 database created", "success");
+
+	progress("Writing ban template", "info");
+	await writeBanTemplate(client, accountId, kvNamespaceId, DEFAULTS.BAN_TEMPLATE);
+	progress("Ban template written", "success");
+
+	progress("Uploading main worker", "info");
+	await uploadMainWorker(client, accountId, RESOURCE_NAMES.MAIN_WORKER, kvNamespaceId, d1DatabaseId, zones);
+	progress("Main worker uploaded", "success");
+
+	progress("Creating worker routes", "info");
+	await createWorkerRoutes(client, zones, RESOURCE_NAMES.MAIN_WORKER);
+	progress("Worker routes created", "success");
+
+	progress("Uploading decisions sync worker", "info");
+	await uploadDecisionsSyncWorker(
+		client, accountId, RESOURCE_NAMES.SYNC_WORKER,
+		kvNamespaceId, crowdsecApiUrl, crowdsecApiKey, apiToken,
+	);
+	progress("Decisions sync worker uploaded", "success");
+
+	progress("Creating cron trigger", "info");
+	await createCronTrigger(client, accountId, RESOURCE_NAMES.SYNC_WORKER, DEFAULTS.CRON_SCHEDULE);
+	progress("Cron trigger created", "success");
+
+	progress("Creating Turnstile widgets", "info");
+	const widgets = await createTurnstileWidgets(client, accountId, zones);
+	progress("Turnstile widgets created", "success");
+
+	if (widgets.size > 0) {
+		progress("Writing Turnstile configuration", "info");
+		await writeTurnstileConfig(client, accountId, kvNamespaceId, widgets);
+		progress("Turnstile configuration written", "success");
+	}
 }
 
 app.get("/zones", async (c) => {
@@ -147,6 +230,72 @@ app.post("/clean", async (c) => {
 		return c.json({ error: extractErrorMessage(err) }, 500);
 	}
 });
+
+app.get("/ws", upgradeWebSocket(() => ({
+	async onMessage(event, ws) {
+		let msg: unknown;
+		try {
+			msg = JSON.parse(event.data as string);
+		} catch {
+			ws.send(JSON.stringify({ type: "done", success: false, error: "Invalid JSON message" }));
+			return;
+		}
+
+		const data = msg as {
+			type: "deploy" | "clean";
+			token: string;
+			zones: Array<Pick<ZoneState, "id" | "domain" | "accountId" | "accountName" | "actions" | "defaultAction" | "routesToProtect" | "turnstile">>;
+			crowdsecApiUrl?: string;
+			crowdsecApiKey?: string;
+		};
+
+		if (!data.token) {
+			ws.send(JSON.stringify({ type: "done", success: false, error: "Missing API token" }));
+			return;
+		}
+
+		if (!Array.isArray(data.zones) || data.zones.length === 0) {
+			ws.send(JSON.stringify({ type: "done", success: false, error: "Invalid zones" }));
+			return;
+		}
+
+		const send: ProgressCallback = (step, status) =>
+			ws.send(JSON.stringify({ type: "progress", step, status }));
+
+		const client = createCloudflareClient(data.token);
+		const zonesByAccount = new Map<string, ZoneState[]>();
+		for (const zone of data.zones) {
+			const list = zonesByAccount.get(zone.accountId) ?? [];
+			list.push({ ...zone, selected: true });
+			zonesByAccount.set(zone.accountId, list);
+		}
+
+		try {
+			if (data.type === "deploy") {
+				if (!data.crowdsecApiUrl || !data.crowdsecApiKey) {
+					ws.send(JSON.stringify({ type: "done", success: false, error: "Missing CrowdSec API credentials" }));
+					return;
+				}
+				for (const [accountId, zones] of zonesByAccount) {
+					await deployInfrastructureWithProgress(
+						client, accountId, zones,
+						data.crowdsecApiUrl, data.crowdsecApiKey, data.token, send,
+					);
+				}
+			} else if (data.type === "clean") {
+				for (const [accountId, zones] of zonesByAccount) {
+					await cleanupInfrastructureWithProgress(client, accountId, zones, send);
+				}
+			} else {
+				ws.send(JSON.stringify({ type: "done", success: false, error: "Unknown operation type" }));
+				return;
+			}
+			ws.send(JSON.stringify({ type: "done", success: true }));
+		} catch (err: unknown) {
+			ws.send(JSON.stringify({ type: "done", success: false, error: extractErrorMessage(err) }));
+		}
+	},
+})));
 
 app.get("*", (c) => {
 	const requestHandler = createRequestHandler(

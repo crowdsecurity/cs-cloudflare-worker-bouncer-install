@@ -1,4 +1,4 @@
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
 type TurnstileConfig = { enabled: boolean; mode: "managed" | "non-interactive" | "invisible" };
 type ZoneState = {
@@ -15,6 +15,54 @@ type ZoneState = {
 type ZonesResponse = { zones: ZoneState[] };
 type ActionStatus = "idle" | "loading" | "success" | "error";
 
+type ProgressMessage = {
+	id: number;
+	step: string;
+	status: "info" | "success" | "error";
+};
+
+function getWsUrl(): string {
+	const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
+	return `${protocol}//${window.location.host}/ws`;
+}
+
+function runWithWebSocket(
+	wsUrl: string,
+	message: object,
+	onProgress: (step: string, status: "info" | "success" | "error") => void,
+): Promise<void> {
+	return new Promise((resolve, reject) => {
+		const ws = new WebSocket(wsUrl);
+		let settled = false;
+		const done = (err?: Error) => {
+			if (settled) return;
+			settled = true;
+			if (err) reject(err);
+			else resolve();
+		};
+		ws.onopen = () => ws.send(JSON.stringify(message));
+		ws.onmessage = (event: MessageEvent<string>) => {
+			const data = JSON.parse(event.data) as {
+				type: string;
+				step?: string;
+				status?: "info" | "success" | "error";
+				success?: boolean;
+				error?: string;
+			};
+			if (data.type === "progress" && data.step && data.status) {
+				onProgress(data.step, data.status);
+			} else if (data.type === "done") {
+				ws.close();
+				done(data.success ? undefined : new Error(data.error ?? "Operation failed"));
+			}
+		};
+		ws.onerror = () => done(new Error("WebSocket connection error"));
+		ws.onclose = () => {
+			if (!settled) done(new Error("Connection closed unexpectedly"));
+		};
+	});
+}
+
 export function ConfigurationPage() {
 	const [apiKey, setApiKey] = useState("");
 	const [availableZones, setAvailableZones] = useState<ZoneState[]>([]);
@@ -29,6 +77,12 @@ export function ConfigurationPage() {
 	const [uninstallStatus, setUninstallStatus] = useState<ActionStatus>("idle");
 	const [uninstallError, setUninstallError] = useState<string | null>(null);
 	const dropdownRef = useRef<HTMLDivElement>(null);
+	const progressEndRef = useRef<HTMLDivElement>(null);
+	const [progressMessages, setProgressMessages] = useState<ProgressMessage[]>([]);
+
+	useEffect(() => {
+		progressEndRef.current?.scrollIntoView({ behavior: "instant" });
+	}, [progressMessages]);
 
 	function fetchZones(key: string) {
 		if (!key.trim()) return;
@@ -61,19 +115,19 @@ export function ConfigurationPage() {
 		if (!apiKey.trim() || selectedZones.length === 0 || !crowdsecApiUrl.trim() || !crowdsecApiKey.trim()) return;
 		setDeployStatus("loading");
 		setDeployError(null);
+		setProgressMessages([]);
 		try {
-			const res = await fetch("/configure", {
-				method: "POST",
-				headers: {
-					"Content-Type": "application/json",
-					Authorization: `Bearer ${apiKey.trim()}`,
+			await runWithWebSocket(
+				getWsUrl(),
+				{
+					type: "deploy",
+					token: apiKey.trim(),
+					zones: selectedZones,
+					crowdsecApiUrl: crowdsecApiUrl.trim(),
+					crowdsecApiKey: crowdsecApiKey.trim(),
 				},
-				body: JSON.stringify({ zones: selectedZones, crowdsecApiUrl: crowdsecApiUrl.trim(), crowdsecApiKey: crowdsecApiKey.trim() }),
-			});
-			if (!res.ok) {
-				const d = await res.json() as { error?: string };
-				throw new Error(d.error ?? `HTTP ${res.status}`);
-			}
+				(step, status) => setProgressMessages((prev) => [...prev, { id: prev.length, step, status }]),
+			);
 			setDeployStatus("success");
 		} catch (err: unknown) {
 			setDeployError(err instanceof Error ? err.message : String(err));
@@ -85,19 +139,17 @@ export function ConfigurationPage() {
 		if (!apiKey.trim() || selectedZones.length === 0) return;
 		setUninstallStatus("loading");
 		setUninstallError(null);
+		setProgressMessages([]);
 		try {
-			const res = await fetch("/clean", {
-				method: "POST",
-				headers: {
-					"Content-Type": "application/json",
-					Authorization: `Bearer ${apiKey.trim()}`,
+			await runWithWebSocket(
+				getWsUrl(),
+				{
+					type: "clean",
+					token: apiKey.trim(),
+					zones: selectedZones,
 				},
-				body: JSON.stringify({ zones: selectedZones }),
-			});
-			if (!res.ok) {
-				const d = await res.json() as { error?: string };
-				throw new Error(d.error ?? `HTTP ${res.status}`);
-			}
+				(step, status) => setProgressMessages((prev) => [...prev, { id: prev.length, step, status }]),
+			);
 			setUninstallStatus("success");
 		} catch (err: unknown) {
 			setUninstallError(err instanceof Error ? err.message : String(err));
@@ -255,6 +307,28 @@ export function ConfigurationPage() {
 							{uninstallStatus === "loading" ? "Uninstalling…" : "Uninstall"}
 						</button>
 					</div>
+					{progressMessages.length > 0 && (
+						<div className="rounded-lg border border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-800/50 p-3 max-h-60 overflow-y-auto font-mono text-xs space-y-1">
+							{progressMessages.map((msg) => (
+								<div
+									key={msg.id}
+									className={`flex items-start gap-2 ${
+										msg.status === "success"
+											? "text-green-600 dark:text-green-400"
+											: msg.status === "error"
+												? "text-red-500"
+												: "text-gray-500 dark:text-gray-400"
+									}`}
+								>
+									<span className="shrink-0">
+										{msg.status === "success" ? "✓" : msg.status === "error" ? "✗" : "›"}
+									</span>
+									<span>{msg.step}</span>
+								</div>
+							))}
+							<div ref={progressEndRef} />
+						</div>
+					)}
 				</form>
 			</div>
 		</div>
