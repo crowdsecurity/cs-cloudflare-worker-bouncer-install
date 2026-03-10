@@ -1,17 +1,15 @@
 {
-	"name": "react-router-hono-fullstack-template",
-	"description": "A modern full-stack template powered by Cloudflare Workers, using Hono for backend APIs, React Router for frontend routing, and shadcn/ui for beautiful, accessible components styled with Tailwind CSS",
+	"name": "cs-cloudflare-worker-bouncer-installer",
+	"description": "A Cloudflare Worker that serves as a bouncer installer for the CS platform.",
 	"cloudflare": {
-		"label": "React Router + Hono Fullstack App",
+		"label": "CS Cloudflare Worker Bouncer Installer",
 		"products": [
 			"Workers"
 		],
 		"categories": [
 			"starter"
 		],
-		"docs_url": "https://developers.cloudflare.com/workers",
-		"preview_icon_url": "https://imagedelivery.net/wSMYJvS3Xw-n339CbDyDIA/d3db20ee-c3bf-4b5c-f1ed-d86021359e00/public",
-		"preview_image_url": "https://imagedelivery.net/wSMYJvS3Xw-n339CbDyDIA/56caa8a9-d3ab-4ac6-32a9-6a5fc686e000/preview",
+		"docs_url": "https://github.com/crowdsecurity/cs-cloudflare-worker-bouncer-install/blob/main/README.md",
 		"publish": true
 	},
 	"dependencies": {
