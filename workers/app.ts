@@ -45,11 +45,7 @@ async function installWorkers(
 	progress: Progress,
 ): Promise<void> {
 	progress("Cleaning existing infrastructure", "info");
-	await deleteTurnstileWidgets(client, accountId);
-	await deleteWorkerRoutes(client, zones, RESOURCE_NAMES.MAIN_WORKER);
-	await deleteWorkerScripts(client, accountId, [RESOURCE_NAMES.MAIN_WORKER, RESOURCE_NAMES.SYNC_WORKER]);
-	await findAndDeleteKVNamespace(client, accountId);
-	await cleanupLegacyD1(client, accountId, progress);
+	await uninstallAll(client, accountId, zones, () => {});
 	progress("Existing infrastructure cleaned", "success");
 
 	progress("Creating KV namespace", "info");
