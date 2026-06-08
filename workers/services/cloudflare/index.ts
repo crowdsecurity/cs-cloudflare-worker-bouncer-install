@@ -6,7 +6,6 @@ export {
   writeTurnstileConfig,
   findAndDeleteKVNamespace,
 } from './kv.js';
-export { createD1Database, findAndDeleteD1Database } from './d1.js';
 export {
   uploadMainWorker,
   uploadDecisionsSyncWorker,

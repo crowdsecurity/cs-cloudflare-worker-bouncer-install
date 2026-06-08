@@ -12,7 +12,6 @@ export interface ZoneProtectionStatus {
   accountName: string;
   bound: boolean;
   kvId: string | null;
-  d1Id: string | null;
   turnstileWidgetId: string | null;
   routesToProtect: string[];
   actions: string[];
@@ -23,7 +22,6 @@ export interface AccountStatus {
   accountId: string;
   accountName: string;
   kvId: string | null;
-  d1Id: string | null;
   zones: ZoneProtectionStatus[];
 }
 
@@ -50,14 +48,6 @@ export async function detectProtectionStatus(
     try {
       for await (const ns of client.kv.namespaces.list({ account_id: account.id })) {
         if (ns.title === RESOURCE_NAMES.KV_NAMESPACE) { kvId = ns.id; break; }
-      }
-    } catch { /* skip */ }
-
-    // Find D1 database
-    let d1Id: string | null = null;
-    try {
-      for await (const db of client.d1.database.list({ account_id: account.id })) {
-        if (db.name === RESOURCE_NAMES.D1_DATABASE && db.uuid) { d1Id = db.uuid; break; }
       }
     } catch { /* skip */ }
 
@@ -96,7 +86,6 @@ export async function detectProtectionStatus(
           accountName,
           bound,
           kvId,
-          d1Id,
           turnstileWidgetId: turnstileByDomain.get(zone.name) ?? null,
           routesToProtect: routesToProtect.length > 0 ? routesToProtect : [`*${zone.name}/*`],
           actions: [...DefaultValues.ACTIONS],
@@ -106,7 +95,7 @@ export async function detectProtectionStatus(
     } catch { /* skip */ }
 
     if (zones.length > 0) {
-      result.push({ accountId: account.id, accountName, kvId, d1Id, zones });
+      result.push({ accountId: account.id, accountName, kvId, zones });
     }
   }
 

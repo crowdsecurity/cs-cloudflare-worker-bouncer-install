@@ -39,7 +39,6 @@ export interface AccountState {
 // Deployment state tracking
 export interface DeploymentState {
   kvNamespaceId?: string;
-  d1DatabaseId?: string;
   workerScriptName: string;
   decisionsSyncScriptName: string;
   turnstileWidgets: Map<string, TurnstileWidgetState>;
@@ -57,7 +56,7 @@ export interface SessionState {
 // Constants for Cloudflare resource names
 export const RESOURCE_NAMES = {
   KV_NAMESPACE: 'CROWDSECCFBOUNCERNS',
-  D1_DATABASE: 'CROWDSECCFBOUNCERDB',
+  AE_DATASET: 'CROWDSECCFBOUNCER_AE',
   MAIN_WORKER: 'crowdsec-cloudflare-worker-bouncer',
   SYNC_WORKER: 'crowdsec-decisions-sync-worker',
   TURNSTILE_WIDGET: 'crowdsec-cloudflare-worker-bouncer-widget',

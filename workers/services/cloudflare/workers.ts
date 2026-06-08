@@ -11,9 +11,9 @@ import { getMainWorkerScript, getDecisionsSyncWorkerScript } from '../../../work
 // Type for worker bindings
 type WorkerBinding =
   | { type: 'kv_namespace'; name: string; namespace_id: string }
+  | { type: 'analytics_engine'; name: string; dataset: string }
   | { type: 'plain_text'; name: string; text: string }
-  | { type: 'secret_text'; name: string; text: string }
-  | { type: 'd1'; name: string; id: string };
+  | { type: 'secret_text'; name: string; text: string };
 
 /**
  * Upload the main bouncer worker
@@ -23,7 +23,6 @@ export async function uploadMainWorker(
   accountId: string,
   scriptName: string,
   kvNamespaceId: string,
-  d1DatabaseId: string | null,
   zones: ZoneState[],
 ): Promise<void> {
 
@@ -48,6 +47,11 @@ export async function uploadMainWorker(
       namespace_id: kvNamespaceId,
     },
     {
+      type: 'analytics_engine',
+      name: RESOURCE_NAMES.AE_DATASET,
+      dataset: RESOURCE_NAMES.AE_DATASET,
+    },
+    {
       type: 'plain_text',
       name: 'ACTIONS_BY_DOMAIN',
       text: JSON.stringify(actionsByDomain),
@@ -59,31 +63,28 @@ export async function uploadMainWorker(
     },
   ];
 
-  // Add D1 binding if database was created
-  if (d1DatabaseId) {
-    bindings.push({
-      type: 'd1',
-      name: RESOURCE_NAMES.D1_DATABASE,
-      id: d1DatabaseId,
-    });
-  }
-
-  // Create worker file with ES module content type
   const workerFile = await toFile(
     new Blob([getMainWorkerScript()], { type: 'application/javascript+module' }),
     'worker.js',
     { type: 'application/javascript+module' }
   );
 
-  await client.workers.scripts.update(scriptName, {
+  const upload = (b: WorkerBinding[]) => client.workers.scripts.update(scriptName, {
     account_id: accountId,
-    metadata: {
-      main_module: 'worker.js',
-      compatibility_date: '2024-01-01',
-      bindings: bindings,
-    },
+    metadata: { main_module: 'worker.js', compatibility_date: '2024-01-01', bindings: b },
     files: [workerFile],
   });
+
+  try {
+    await upload(bindings);
+  } catch (err) {
+    // Analytics Engine may not be enabled on this account. Retry without the
+    // AE binding — metrics will be silently skipped by the worker (it guards
+    // with `if (!env.CROWDSECCFBOUNCER_AE) return`).
+    const msg = err instanceof Error ? err.message : String(err);
+    if (!msg.toLowerCase().includes('analytics')) throw err;
+    await upload(bindings.filter((b) => b.type !== 'analytics_engine'));
+  }
 }
 
 /**

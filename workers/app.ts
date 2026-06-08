@@ -9,7 +9,6 @@ import {
 	writeTurnstileConfig,
 	findAndDeleteKVNamespace,
 } from "./services/cloudflare/kv.js";
-import { createD1Database, findAndDeleteD1Database } from "./services/cloudflare/d1.js";
 import {
 	uploadMainWorker,
 	uploadDecisionsSyncWorker,
@@ -33,7 +32,7 @@ type Progress = (step: string, status: "info" | "success" | "error") => void;
 // ─── Operation functions ──────────────────────────────────────────────────────
 
 /**
- * Full install: wipes any existing infra, then creates KV, D1, both workers,
+ * Full install: wipes any existing infra, then creates KV, both workers,
  * cron trigger, Turnstile, and routes for all provided zones.
  */
 async function installWorkers(
@@ -50,23 +49,19 @@ async function installWorkers(
 	await deleteWorkerRoutes(client, zones, RESOURCE_NAMES.MAIN_WORKER);
 	await deleteWorkerScripts(client, accountId, [RESOURCE_NAMES.MAIN_WORKER, RESOURCE_NAMES.SYNC_WORKER]);
 	await findAndDeleteKVNamespace(client, accountId);
-	await findAndDeleteD1Database(client, accountId);
+	await cleanupLegacyD1(client, accountId, progress);
 	progress("Existing infrastructure cleaned", "success");
 
 	progress("Creating KV namespace", "info");
 	const kvNamespaceId = await createKVNamespace(client, accountId);
 	progress("KV namespace created", "success");
 
-	progress("Creating D1 database", "info");
-	const d1DatabaseId = await createD1Database(client, accountId);
-	progress("D1 database created", "success");
-
 	progress("Writing ban template", "info");
 	await writeBanTemplate(client, accountId, kvNamespaceId, DEFAULTS.BAN_TEMPLATE);
 	progress("Ban template written", "success");
 
 	progress("Uploading main worker", "info");
-	await uploadMainWorker(client, accountId, RESOURCE_NAMES.MAIN_WORKER, kvNamespaceId, d1DatabaseId, zones);
+	await uploadMainWorker(client, accountId, RESOURCE_NAMES.MAIN_WORKER, kvNamespaceId, zones);
 	progress("Main worker uploaded", "success");
 
 	progress("Creating worker routes", "info");
@@ -94,7 +89,7 @@ async function installWorkers(
 
 /**
  * Bind zone: adds a worker route for a single zone to the existing main worker.
- * Does not touch KV, D1, or the worker scripts themselves.
+ * Does not touch KV or the worker scripts themselves.
  */
 async function bindZone(
 	client: CloudflareClient,
@@ -109,7 +104,7 @@ async function bindZone(
 
 /**
  * Unbind zone: removes the worker route for a single zone.
- * Workers, KV, and D1 are left intact.
+ * Workers and KV are left intact.
  */
 async function unbindZone(
 	client: CloudflareClient,
@@ -146,9 +141,33 @@ async function uninstallAll(
 	await findAndDeleteKVNamespace(client, accountId);
 	progress("KV namespace removed", "success");
 
-	progress("Removing D1 database", "info");
-	await findAndDeleteD1Database(client, accountId);
-	progress("D1 database removed", "success");
+	//Removing resources from previous versions of the installer, just in case.
+	await cleanupLegacyD1(client, accountId, progress);
+}
+
+/**
+ * One-time migration shim: deletes the legacy CROWDSECCFBOUNCERDB D1 database
+ * if it still exists from a previous install. Logs a warning if the token
+ * lacks D1:Edit permission but does not abort the uninstall.
+ */
+async function cleanupLegacyD1(
+	client: CloudflareClient,
+	accountId: string,
+	progress: Progress,
+): Promise<void> {
+	const LEGACY_D1_NAME = "CROWDSECCFBOUNCERDB";
+	try {
+		for await (const db of client.d1.database.list({ account_id: accountId })) {
+			if (db.name === LEGACY_D1_NAME && db.uuid) {
+				progress(`Removing legacy D1 database ${LEGACY_D1_NAME}`, "info");
+				await client.d1.database.delete(db.uuid, { account_id: accountId });
+				progress(`Legacy D1 database ${LEGACY_D1_NAME} removed`, "success");
+				return;
+			}
+		}
+	} catch {
+		progress(`Could not remove legacy D1 database ${LEGACY_D1_NAME} — delete it manually via the dashboard`, "info");
+	}
 }
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────

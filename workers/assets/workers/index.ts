@@ -29,5 +29,3 @@ export function getMainWorkerScript(): string {
 export function getDecisionsSyncWorkerScript(): string {
   return decisionsSyncWorkerBundle;
 }
-
-export { METRICS_SQL } from './metrics-schema.js';
