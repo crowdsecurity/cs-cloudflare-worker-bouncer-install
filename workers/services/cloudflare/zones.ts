@@ -1,8 +1,117 @@
 import {
   DEFAULTS as DefaultValues,
+  RESOURCE_NAMES,
   type CloudflareClient,
   type ZoneState,
 } from './types.js';
+
+export interface ZoneProtectionStatus {
+  zoneId: string;
+  domain: string;
+  accountId: string;
+  accountName: string;
+  bound: boolean;
+  kvId: string | null;
+  d1Id: string | null;
+  turnstileWidgetId: string | null;
+  routesToProtect: string[];
+  actions: string[];
+  defaultAction: string;
+}
+
+export interface AccountStatus {
+  accountId: string;
+  accountName: string;
+  kvId: string | null;
+  d1Id: string | null;
+  zones: ZoneProtectionStatus[];
+}
+
+/**
+ * Detect which zones already have the CrowdSec bouncer deployed.
+ * Returns per-account status including KV/D1 IDs and per-zone binding state.
+ */
+export async function detectProtectionStatus(
+  client: CloudflareClient,
+): Promise<AccountStatus[]> {
+  // Collect accounts
+  const accounts: Array<{ id: string; name: string }> = [];
+  for await (const account of client.accounts.list()) {
+    accounts.push({ id: account.id, name: account.name });
+  }
+
+  const result: AccountStatus[] = [];
+
+  for (const account of accounts) {
+    const accountName = account.name.replace(/'s Account$/, '');
+
+    // Find KV namespace
+    let kvId: string | null = null;
+    try {
+      for await (const ns of client.kv.namespaces.list({ account_id: account.id })) {
+        if (ns.title === RESOURCE_NAMES.KV_NAMESPACE) { kvId = ns.id; break; }
+      }
+    } catch { /* skip */ }
+
+    // Find D1 database
+    let d1Id: string | null = null;
+    try {
+      for await (const db of client.d1.database.list({ account_id: account.id })) {
+        if (db.name === RESOURCE_NAMES.D1_DATABASE && db.uuid) { d1Id = db.uuid; break; }
+      }
+    } catch { /* skip */ }
+
+    // Find Turnstile widgets (map domain → sitekey)
+    const turnstileByDomain = new Map<string, string>();
+    try {
+      for await (const widget of client.turnstile.widgets.list({ account_id: account.id })) {
+        if (widget.name === RESOURCE_NAMES.TURNSTILE_WIDGET) {
+          for (const domain of (widget.domains ?? [])) {
+            turnstileByDomain.set(domain, widget.sitekey);
+          }
+        }
+      }
+    } catch { /* skip */ }
+
+    // List zones
+    const zones: ZoneProtectionStatus[] = [];
+    try {
+      for await (const zone of client.zones.list({ account: { id: account.id } })) {
+        // Check if the main bouncer route is bound to this zone
+        let bound = false;
+        const routesToProtect: string[] = [];
+        try {
+          for await (const route of client.workers.routes.list({ zone_id: zone.id })) {
+            if (route.script === RESOURCE_NAMES.MAIN_WORKER) {
+              bound = true;
+              routesToProtect.push(route.pattern);
+            }
+          }
+        } catch { /* skip */ }
+
+        zones.push({
+          zoneId: zone.id,
+          domain: zone.name,
+          accountId: account.id,
+          accountName,
+          bound,
+          kvId,
+          d1Id,
+          turnstileWidgetId: turnstileByDomain.get(zone.name) ?? null,
+          routesToProtect: routesToProtect.length > 0 ? routesToProtect : [`*${zone.name}/*`],
+          actions: [...DefaultValues.ACTIONS],
+          defaultAction: DefaultValues.DEFAULT_ACTION,
+        });
+      }
+    } catch { /* skip */ }
+
+    if (zones.length > 0) {
+      result.push({ accountId: account.id, accountName, kvId, d1Id, zones });
+    }
+  }
+
+  return result;
+}
 
 /**
  * Discover all zones accessible with the given Cloudflare token

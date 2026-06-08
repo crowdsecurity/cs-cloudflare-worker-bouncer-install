@@ -201,3 +201,6 @@ dist
 ### React Router ###
 .react-router/
 /build/
+
+### Temporary Reflection Docs
+.branch-specs/

@@ -167,6 +167,35 @@ export async function createCronTrigger(
   });
 }
 
+export interface CrowdsecWorkerInfo {
+  name: string;
+  createdOn: string | null;
+  modifiedOn: string | null;
+}
+
+/**
+ * List all workers whose name starts with "crowdsec" across all accounts
+ */
+export async function listCrowdsecWorkers(
+  client: CloudflareClient,
+): Promise<CrowdsecWorkerInfo[]> {
+  const result: CrowdsecWorkerInfo[] = [];
+  for await (const account of client.accounts.list()) {
+    try {
+      for await (const script of client.workers.scripts.list({ account_id: account.id })) {
+        if (script.id?.startsWith('crowdsec')) {
+          result.push({
+            name: script.id,
+            createdOn: script.created_on ?? null,
+            modifiedOn: script.modified_on ?? null,
+          });
+        }
+      }
+    } catch { /* skip accounts we can't access */ }
+  }
+  return result;
+}
+
 /**
  * Delete worker scripts
  */

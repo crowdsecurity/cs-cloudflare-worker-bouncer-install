@@ -1,17 +1,17 @@
 import type { Route } from "./+types/home";
-import { ConfigurationPage } from "../configuration/configuration";
+import { InstallerPage } from "../configuration/installer";
 
 export function meta({}: Route.MetaArgs) {
 	return [
-		{ title: "Crowdsec remediation component for Cloudflare Workers" },
-		{ name: "description", content: "Deploy your Crowdsec remediation component for Cloudflare Workers" },
+		{ title: "CrowdSec — Cloudflare Worker Bouncer Installer" },
+		{ name: "description", content: "Deploy the CrowdSec remediation component for Cloudflare Workers" },
 	];
 }
 
 export function loader({ context }: Route.LoaderArgs) {
-	return {  };
+	return {};
 }
 
 export default function Home({ loaderData }: Route.ComponentProps) {
-	return <ConfigurationPage />;
+	return <InstallerPage />;
 }

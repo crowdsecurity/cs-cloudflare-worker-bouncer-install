@@ -67,7 +67,7 @@ export const RESOURCE_NAMES = {
 
 // Default values
 export const DEFAULTS = {
-  CRON_SCHEDULE: '*/5 * * * *',
+  CRON_SCHEDULE: '*/1 * * * *',
   BAN_TEMPLATE: 'Access Denied',
   DEFAULT_ACTION: 'captcha' as const,
   ACTIONS: ['ban', 'captcha'] as string[],
