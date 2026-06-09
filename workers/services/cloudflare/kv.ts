@@ -68,6 +68,29 @@ export async function writeTurnstileConfig(
 }
 
 /**
+ * Signal the sync worker to reset KV decisions on its next cron run.
+ * Sets RESET=true and clears WARMED_UP so the worker re-fetches all decisions
+ * from LAPI from scratch. BAN_TEMPLATE and TURNSTILE_CONFIG are preserved by
+ * the worker during reset.
+ */
+export async function signalKVReset(
+  client: CloudflareClient,
+  accountId: string,
+  namespaceId: string,
+): Promise<void> {
+  await client.kv.namespaces.values.update(namespaceId, 'RESET', {
+    account_id: accountId,
+    value: 'true',
+    metadata: JSON.stringify({}),
+  });
+  await client.kv.namespaces.values.update(namespaceId, 'WARMED_UP', {
+    account_id: accountId,
+    value: 'false',
+    metadata: JSON.stringify({}),
+  });
+}
+
+/**
  * Find and delete the bouncer's KV namespace
  */
 export async function findAndDeleteKVNamespace(

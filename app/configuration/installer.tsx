@@ -9,7 +9,6 @@ type ZoneStatus = {
   accountName: string;
   bound: boolean;
   kvId: string | null;
-  d1Id: string | null;
   turnstileWidgetId: string | null;
   routesToProtect: string[];
   actions: string[];
@@ -20,7 +19,6 @@ type AccountStatus = {
   accountId: string;
   accountName: string;
   kvId: string | null;
-  d1Id: string | null;
   zones: ZoneStatus[];
 };
 
@@ -217,7 +215,7 @@ function CfTokenSection({
 // ─── Section 2 — CrowdSec Endpoint ───────────────────────────────────────────
 
 function CrowdSecSection({
-  enabled, url, setUrl, apiKey, setApiKey, installedUrl,
+  enabled, url, setUrl, apiKey, setApiKey, installedUrl, token, accountId,
 }: {
   enabled: boolean;
   url: string;
@@ -225,10 +223,17 @@ function CrowdSecSection({
   apiKey: string;
   setApiKey: (v: string) => void;
   installedUrl: string | null | "loading";
+  token: string;
+  accountId: string | null;
 }) {
-  const [open, setOpen]       = useState(false);
-  const [showKey, setShowKey] = useState(false);
-  const [editing, setEditing] = useState(false);
+  const [open, setOpen]         = useState(false);
+  const [showKey, setShowKey]   = useState(false);
+  const [editing, setEditing]   = useState(false);
+  const [updateStatus, setUpdateStatus] = useState<"idle" | "saving" | "saved" | "error">("idle");
+  const [updateError, setUpdateError]   = useState<string | null>(null);
+
+  // The values as they exist on the deployed worker — used to detect changes
+  const installedUrlRef = useRef<string | null>(null);
 
   // Auto-open when it becomes enabled for the first time
   const didAutoOpen = useRef(false);
@@ -241,12 +246,40 @@ function CrowdSecSection({
   const prevInstalledUrl = useRef<string | null>(null);
   if (typeof installedUrl === "string" && installedUrl !== "loading" && installedUrl !== prevInstalledUrl.current) {
     prevInstalledUrl.current = installedUrl;
+    installedUrlRef.current  = installedUrl;
     Promise.resolve().then(() => { setUrl(installedUrl); setEditing(false); });
   }
 
-  const hostLabel = (() => { try { return new URL(url).host; } catch { return null; } })();
-  const isLoading    = installedUrl === "loading";
+  const hostLabel     = (() => { try { return new URL(url).host; } catch { return null; } })();
+  const isLoading     = installedUrl === "loading";
   const showInstalled = typeof installedUrl === "string" && installedUrl !== "loading" && !editing;
+
+  // "Update Now" is active when editing an already-deployed config and values differ
+  const isDirty = editing && installedUrlRef.current !== null && (
+    url.trim() !== installedUrlRef.current || apiKey.trim() !== ""
+  );
+
+  async function handleUpdateNow() {
+    if (!isDirty || !accountId) return;
+    setUpdateStatus("saving");
+    setUpdateError(null);
+    try {
+      const res = await fetch("/crowdsec-credentials", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+        body: JSON.stringify({ lapiUrl: url.trim(), lapiKey: apiKey.trim(), accountId }),
+      });
+      const data = await res.json() as { ok?: boolean; error?: string };
+      if (!res.ok || !data.ok) throw new Error(data.error ?? `HTTP ${res.status}`);
+      installedUrlRef.current = url.trim();
+      setUpdateStatus("saved");
+      setEditing(false);
+      setTimeout(() => setUpdateStatus("idle"), 3000);
+    } catch (err: unknown) {
+      setUpdateError(err instanceof Error ? err.message : "Update failed");
+      setUpdateStatus("error");
+    }
+  }
 
   return (
     <div style={{ borderBottom: `1px solid ${T.border}` }}>
@@ -281,11 +314,13 @@ function CrowdSecSection({
                   {installedUrl}
                 </div>
                 <div style={{ fontSize: 10.5, color: T.textMute }}>
-                  Current endpoint used for protection
+                  {updateStatus === "saved"
+                    ? "✓ Credentials updated — KV reset signalled"
+                    : "Current endpoint used for protection"}
                 </div>
               </div>
               <button
-                onClick={() => setEditing(true)}
+                onClick={() => { setEditing(true); setUpdateStatus("idle"); setUpdateError(null); }}
                 style={{
                   flexShrink: 0, padding: "4px 11px", borderRadius: 4,
                   border: `1px solid ${T.border}`, background: T.surface,
@@ -301,7 +336,9 @@ function CrowdSecSection({
             <>
               {editing && (
                 <div style={{ marginBottom: 10, fontSize: 11, color: T.textMute }}>
-                  ⚠️ Editing will update the endpoint info on next zone install (for all zones).
+                  Changing the URL or key and clicking <strong>Update Now</strong> will update
+                  the deployed worker and reset KV decisions — the sync worker will
+                  re-fetch all decisions from the new endpoint on its next run.
                 </div>
               )}
               <div style={{ marginBottom: 12 }}>
@@ -313,44 +350,65 @@ function CrowdSecSection({
                   style={inputStyle}
                 />
               </div>
-              <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                <div style={{ flex: 1 }}>
-                  <label style={{ ...labelStyle, display: "block", marginBottom: 5 }}>API Key</label>
-                  <div style={{ position: "relative" }}>
-                    <input
-                      value={apiKey}
-                      onChange={(e) => setApiKey((e.target as HTMLInputElement).value)}
-                      type={showKey ? "text" : "password"}
-                      placeholder="cs_live_••••••••"
-                      style={{ ...inputStyle, fontFamily: "'JetBrains Mono',monospace", paddingRight: 52 }}
-                    />
-                    <button
-                      onClick={() => setShowKey((v) => !v)}
-                      style={{
-                        position: "absolute", right: 10, top: "50%", transform: "translateY(-50%)",
-                        background: "none", border: "none", color: T.textFaint,
-                        cursor: "pointer", fontSize: 9, letterSpacing: "0.06em",
-                        fontFamily: "inherit", fontWeight: 700, padding: 0,
-                      }}
-                    >
-                      {showKey ? "HIDE" : "SHOW"}
-                    </button>
-                  </div>
-                </div>
-                {editing && installedUrl && (
+              <div style={{ marginBottom: updateError ? 8 : 0 }}>
+                <label style={{ ...labelStyle, display: "block", marginBottom: 5 }}>API Key</label>
+                <div style={{ position: "relative" }}>
+                  <input
+                    value={apiKey}
+                    onChange={(e) => setApiKey((e.target as HTMLInputElement).value)}
+                    type={showKey ? "text" : "password"}
+                    placeholder={editing && installedUrlRef.current ? "Leave blank to keep existing key" : "cs_live_••••••••"}
+                    style={{ ...inputStyle, fontFamily: "'JetBrains Mono',monospace", paddingRight: 52 }}
+                  />
                   <button
-                    onClick={() => setEditing(false)}
+                    onClick={() => setShowKey((v) => !v)}
                     style={{
-                      alignSelf: "flex-end", padding: "8px 12px", borderRadius: 5,
+                      position: "absolute", right: 10, top: "50%", transform: "translateY(-50%)",
+                      background: "none", border: "none", color: T.textFaint,
+                      cursor: "pointer", fontSize: 9, letterSpacing: "0.06em",
+                      fontFamily: "inherit", fontWeight: 700, padding: 0,
+                    }}
+                  >
+                    {showKey ? "HIDE" : "SHOW"}
+                  </button>
+                </div>
+              </div>
+
+              {updateError && (
+                <div style={{ fontSize: 11, color: T.red, marginBottom: 8 }}>✗ {updateError}</div>
+              )}
+
+              {editing && installedUrlRef.current !== null && (
+                <div style={{ display: "flex", gap: 8, marginTop: 10 }}>
+                  <button
+                    onClick={() => { setEditing(false); setUrl(installedUrlRef.current!); setApiKey(""); setUpdateError(null); }}
+                    style={{
+                      padding: "7px 12px", borderRadius: 5,
                       border: `1px solid ${T.border}`, background: "transparent",
                       color: T.textMute, fontSize: 11, fontWeight: 600,
-                      cursor: "pointer", fontFamily: "inherit", whiteSpace: "nowrap",
+                      cursor: "pointer", fontFamily: "inherit",
                     }}
                   >
                     Cancel
                   </button>
-                )}
-              </div>
+                  <button
+                    onClick={handleUpdateNow}
+                    disabled={!isDirty || updateStatus === "saving"}
+                    style={{
+                      padding: "7px 14px", borderRadius: 5, border: "none",
+                      background: isDirty ? T.orange : T.panelAlt,
+                      color: isDirty ? "#fff" : T.textFaint,
+                      fontSize: 11, fontWeight: 700,
+                      cursor: isDirty && updateStatus !== "saving" ? "pointer" : "not-allowed",
+                      fontFamily: "inherit", display: "flex", alignItems: "center", gap: 6,
+                      transition: "background 0.15s",
+                    }}
+                  >
+                    {updateStatus === "saving" && <Spinner size={9} color="#fff" />}
+                    {updateStatus === "saving" ? "Updating…" : "Update Now"}
+                  </button>
+                </div>
+              )}
             </>
           )}
 
@@ -884,6 +942,7 @@ export function InstallerPage() {
   const [csKey, setCsKey]                     = useState("");
   const [workersInstalled, setWorkersInstalled] = useState<boolean | null>(null);
   const [installedLapiUrl, setInstalledLapiUrl] = useState<string | null | "loading">(null);
+  const [installedAccountId, setInstalledAccountId] = useState<string | null>(null);
   const [zones, setZones]           = useState<ZoneStatus[]>([]);
   const [zonesLoading, setZonesLoading] = useState(false);
   const debRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -891,7 +950,7 @@ export function InstallerPage() {
   const tokenValid = tokenState === "valid";
 
   async function verifyToken(val: string) {
-    if (!val.trim()) { setTokenState("idle"); setWorkersInstalled(null); setInstalledLapiUrl(null); setZones([]); setZonesLoading(false); return; }
+    if (!val.trim()) { setTokenState("idle"); setWorkersInstalled(null); setInstalledLapiUrl(null); setInstalledAccountId(null); setZones([]); setZonesLoading(false); return; }
     setTokenState("checking");
     try {
       const res  = await fetch("/verify-token", { headers: { Authorization: `Bearer ${val.trim()}` } });
@@ -918,8 +977,12 @@ export function InstallerPage() {
             // Fetch zone status last — slowest call
             setZonesLoading(true);
             fetch("/status", { headers: { Authorization: `Bearer ${val.trim()}` } })
-              .then((r) => r.json() as Promise<{ accounts?: Array<{ zones: ZoneStatus[] }> }>)
-              .then((d) => setZones((d.accounts ?? []).flatMap((a) => a.zones)))
+              .then((r) => r.json() as Promise<{ accounts?: Array<AccountStatus> }>)
+              .then((d) => {
+                const accounts = d.accounts ?? [];
+                setInstalledAccountId(accounts[0]?.accountId ?? null);
+                setZones(accounts.flatMap((a) => a.zones));
+              })
               .catch(() => setZones([]))
               .finally(() => setZonesLoading(false));
           })
@@ -1015,6 +1078,8 @@ export function InstallerPage() {
             url={csUrl} setUrl={setCsUrl}
             apiKey={csKey} setApiKey={setCsKey}
             installedUrl={installedLapiUrl}
+            token={token}
+            accountId={installedAccountId}
           />
           <ZonesSection
             zones={zones} loading={zonesLoading}

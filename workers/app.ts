@@ -8,10 +8,12 @@ import {
 	writeBanTemplate,
 	writeTurnstileConfig,
 	findAndDeleteKVNamespace,
+	signalKVReset,
 } from "./services/cloudflare/kv.js";
 import {
 	uploadMainWorker,
 	uploadDecisionsSyncWorker,
+	updateSyncWorkerCredentials,
 	createCronTrigger,
 	deleteWorkerScripts,
 } from "./services/cloudflare/workers.js";
@@ -221,6 +223,35 @@ app.get("/status", async (c) => {
 		const client = createCloudflareClient(token);
 		const accounts = await detectProtectionStatus(client);
 		return c.json({ accounts });
+	} catch (err: unknown) {
+		return c.json({ error: extractErrorMessage(err) }, 400);
+	}
+});
+
+app.patch("/crowdsec-credentials", async (c) => {
+	const token = extractToken(c.req.header("Authorization"));
+	if (!token) return c.json({ error: "Missing API Token" }, 401);
+
+	const body = await c.req.json<{ lapiUrl: string; lapiKey: string; accountId: string }>();
+	if (!body.lapiUrl || !body.lapiKey || !body.accountId) {
+		return c.json({ error: "Missing lapiUrl, lapiKey or accountId" }, 400);
+	}
+
+	try {
+		const client = createCloudflareClient(token);
+
+		const updated = await updateSyncWorkerCredentials(client, body.accountId, body.lapiUrl, body.lapiKey);
+		if (!updated) return c.json({ error: "Sync worker not found — deploy first" }, 404);
+
+		// Find the KV namespace and signal a reset so the sync worker re-fetches
+		// all decisions from the new LAPI on its next cron run.
+		let kvId: string | null = null;
+		for await (const ns of client.kv.namespaces.list({ account_id: body.accountId })) {
+			if (ns.title === RESOURCE_NAMES.KV_NAMESPACE) { kvId = ns.id; break; }
+		}
+		if (kvId) await signalKVReset(client, body.accountId, kvId);
+
+		return c.json({ ok: true });
 	} catch (err: unknown) {
 		return c.json({ error: extractErrorMessage(err) }, 400);
 	}

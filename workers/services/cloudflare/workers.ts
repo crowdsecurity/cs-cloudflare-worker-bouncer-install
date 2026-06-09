@@ -153,6 +153,33 @@ export async function uploadDecisionsSyncWorker(
 }
 
 /**
+ * Update LAPI_URL and LAPI_KEY on an already-deployed sync worker without
+ * re-uploading the script. Returns false if the worker does not exist.
+ */
+export async function updateSyncWorkerCredentials(
+  client: CloudflareClient,
+  accountId: string,
+  lapiUrl: string,
+  lapiKey: string,
+): Promise<boolean> {
+  try {
+    await client.workers.scripts.scriptAndVersionSettings.edit(RESOURCE_NAMES.SYNC_WORKER, {
+      account_id: accountId,
+      settings: {
+        bindings: [
+          { type: 'plain_text', name: 'LAPI_URL', text: lapiUrl },
+          { type: 'secret_text', name: 'LAPI_KEY', text: lapiKey },
+        ],
+      },
+    });
+    return true;
+  } catch (err) {
+    if (isNotFoundError(err)) return false;
+    throw err;
+  }
+}
+
+/**
  * Set up cron trigger for the sync worker
  */
 export async function createCronTrigger(
