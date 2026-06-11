@@ -67,6 +67,60 @@ export async function writeTurnstileConfig(
   );
 }
 
+type TurnstileKVConfig = Record<string, { site_key: string; secret: string }>;
+
+/**
+ * Read the current TURNSTILE_CONFIG from KV. Returns an empty object if absent.
+ */
+export async function readTurnstileConfig(
+  client: CloudflareClient,
+  accountId: string,
+  namespaceId: string,
+): Promise<TurnstileKVConfig> {
+  try {
+    const res = await client.kv.namespaces.values.get(
+      namespaceId,
+      RESOURCE_NAMES.TURNSTILE_CONFIG_KEY,
+      { account_id: accountId },
+    );
+    const text = typeof res === 'string' ? res : await (res as Response).text();
+    return JSON.parse(text) as TurnstileKVConfig;
+  } catch {
+    return {};
+  }
+}
+
+/**
+ * Merge updates into the existing TURNSTILE_CONFIG in KV.
+ * Pass null as the widget value for a domain to remove it.
+ */
+export async function updateTurnstileConfig(
+  client: CloudflareClient,
+  accountId: string,
+  namespaceId: string,
+  updates: Map<string, { site_key: string; secret: string } | null>,
+): Promise<void> {
+  const current = await readTurnstileConfig(client, accountId, namespaceId);
+
+  for (const [domain, widget] of updates) {
+    if (widget === null) {
+      delete current[domain];
+    } else {
+      current[domain] = widget;
+    }
+  }
+
+  await client.kv.namespaces.values.update(
+    namespaceId,
+    RESOURCE_NAMES.TURNSTILE_CONFIG_KEY,
+    {
+      account_id: accountId,
+      value: JSON.stringify(current),
+      metadata: JSON.stringify({}),
+    },
+  );
+}
+
 /**
  * Signal the sync worker to reset KV decisions on its next cron run.
  * Sets RESET=true and clears WARMED_UP so the worker re-fetches all decisions

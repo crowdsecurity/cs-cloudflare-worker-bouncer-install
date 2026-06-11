@@ -9,6 +9,7 @@ import {
 	writeTurnstileConfig,
 	findAndDeleteKVNamespace,
 	signalKVReset,
+	updateTurnstileConfig,
 } from "./services/cloudflare/kv.js";
 import {
 	uploadMainWorker,
@@ -18,7 +19,12 @@ import {
 	deleteWorkerScripts,
 } from "./services/cloudflare/workers.js";
 import { createWorkerRoutes, deleteWorkerRoutes } from "./services/cloudflare/routes.js";
-import { createTurnstileWidgets, deleteTurnstileWidgets } from "./services/cloudflare/turnstile.js";
+import {
+	createTurnstileWidgets,
+	deleteTurnstileWidgets,
+	createTurnstileWidgetForDomain,
+	deleteTurnstileWidgetForDomain,
+} from "./services/cloudflare/turnstile.js";
 import { RESOURCE_NAMES, DEFAULTS, type ZoneState, type CloudflareClient } from "./services/cloudflare/types.js";
 
 const app = new Hono();
@@ -252,6 +258,54 @@ app.patch("/crowdsec-credentials", async (c) => {
 		if (kvId) await signalKVReset(client, body.accountId, kvId);
 
 		return c.json({ ok: true });
+	} catch (err: unknown) {
+		return c.json({ error: extractErrorMessage(err) }, 400);
+	}
+});
+
+app.patch("/turnstile-config", async (c) => {
+	const token = extractToken(c.req.header("Authorization"));
+	if (!token) return c.json({ error: "Missing API Token" }, 401);
+
+	const body = await c.req.json<{
+		accountId: string;
+		zones: Array<{ domain: string; mode: "managed" | "non-interactive" | "invisible" | "disabled" }>;
+	}>();
+	if (!body.accountId || !Array.isArray(body.zones) || body.zones.length === 0) {
+		return c.json({ error: "Missing accountId or zones" }, 400);
+	}
+
+	try {
+		const client = createCloudflareClient(token);
+
+		// Find KV namespace
+		let kvId: string | null = null;
+		for await (const ns of client.kv.namespaces.list({ account_id: body.accountId })) {
+			if (ns.title === RESOURCE_NAMES.KV_NAMESPACE) { kvId = ns.id; break; }
+		}
+		if (!kvId) return c.json({ error: "KV namespace not found — deploy first" }, 404);
+
+		// Process each zone: create or delete widget, build KV update map
+		const kvUpdates = new Map<string, { site_key: string; secret: string } | null>();
+		const errors: string[] = [];
+
+		for (const zone of body.zones) {
+			if (zone.mode === "disabled") {
+				await deleteTurnstileWidgetForDomain(client, body.accountId, zone.domain);
+				kvUpdates.set(zone.domain, null);
+			} else {
+				const widget = await createTurnstileWidgetForDomain(client, body.accountId, zone.domain, zone.mode);
+				if (widget) {
+					kvUpdates.set(zone.domain, { site_key: widget.siteKey, secret: widget.secret });
+				} else {
+					errors.push(zone.domain);
+				}
+			}
+		}
+
+		await updateTurnstileConfig(client, body.accountId, kvId, kvUpdates);
+
+		return c.json({ ok: true, ...(errors.length > 0 && { failed: errors }) });
 	} catch (err: unknown) {
 		return c.json({ error: extractErrorMessage(err) }, 400);
 	}

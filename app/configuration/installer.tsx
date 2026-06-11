@@ -1,4 +1,4 @@
-import { useRef, useState } from "react";
+import { useRef, useState, useEffect } from "react";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -446,10 +446,13 @@ function runWs(
   });
 }
 
-function ZoneRow({ zone, selected, busy, onToggle, onInstall, onRemove }: {
+type TurnstileMode = "managed" | "non-interactive" | "invisible";
+
+function ZoneRow({ zone, selected, busy, captchaActive, onToggle, onInstall, onRemove }: {
   zone: ZoneStatus;
   selected: boolean;
   busy: boolean;
+  captchaActive: boolean;
   onToggle: () => void;
   onInstall: () => void;
   onRemove: () => void;
@@ -498,6 +501,16 @@ function ZoneRow({ zone, selected, busy, onToggle, onInstall, onRemove }: {
             <span style={{ width: 4, height: 4, borderRadius: "50%", background: zone.bound ? T.green : T.textFaint }} />
             {zone.bound ? "PROTECTED" : "UNPROTECTED"}
           </span>
+          {captchaActive && (
+            <span style={{
+              fontSize: 9, fontWeight: 700, letterSpacing: "0.06em",
+              padding: "1px 6px", borderRadius: 3,
+              background: T.blueBg, border: `1px solid ${T.blueBd}`,
+              color: T.blue, display: "inline-flex", alignItems: "center", gap: 3,
+            }}>
+              SUPPORTS CAPTCHA
+            </span>
+          )}
           <span style={{
             fontSize: 10, fontFamily: "'JetBrains Mono',monospace",
             padding: "1px 6px", borderRadius: 3,
@@ -644,6 +657,23 @@ function ZonesSection({
   const [csError, setCsError]   = useState(false);
   const progressId = useRef(0);
 
+  // zoneId → current TurnstileMode (absent = disabled)
+  const [captchaMap, setCaptchaMap] = useState<Map<string, TurnstileMode>>(new Map());
+  const [captchaDropdownOpen, setCaptchaDropdownOpen] = useState(false);
+  const [captchaBusy, setCaptchaBusy] = useState(false);
+
+  // Initialise captchaMap from zone turnstileWidgetId on load
+  useEffect(() => {
+    setCaptchaMap((prev) => {
+      const next = new Map(prev);
+      for (const z of zones) {
+        if (z.turnstileWidgetId && !next.has(z.zoneId)) next.set(z.zoneId, "managed");
+        if (!z.turnstileWidgetId) next.delete(z.zoneId);
+      }
+      return next;
+    });
+  }, [zones]);
+
   function requestBind(targets: ZoneStatus[]) {
     if (!workersInstalled && (!csUrl.trim() || !csKey.trim())) {
       setCsError(true);
@@ -760,6 +790,40 @@ function ZonesSection({
     const ids = filtered.map((z) => z.zoneId);
     const allSel = ids.every((id) => selected.has(id));
     setSelected((s) => { const n = new Set(s); allSel ? ids.forEach((id) => n.delete(id)) : ids.forEach((id) => n.add(id)); return n; });
+  }
+
+  async function execCaptcha(mode: TurnstileMode | "disabled") {
+    const targets = selList.filter((z) => z.accountId === selList[0]?.accountId);
+    if (targets.length === 0) return;
+    setCaptchaBusy(true);
+    setCaptchaDropdownOpen(false);
+    try {
+      const res = await fetch("/turnstile-config", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+        body: JSON.stringify({
+          accountId: targets[0].accountId,
+          zones: targets.map((z) => ({ domain: z.domain, mode })),
+        }),
+      });
+      const data = await res.json() as { ok?: boolean; failed?: string[]; error?: string };
+      if (!res.ok || !data.ok) throw new Error(data.error ?? `HTTP ${res.status}`);
+      setCaptchaMap((prev) => {
+        const next = new Map(prev);
+        for (const z of targets) {
+          if (mode === "disabled") next.delete(z.zoneId);
+          else next.set(z.zoneId, mode);
+        }
+        return next;
+      });
+      if (data.failed?.length) {
+        addProgress(`Captcha: failed for ${data.failed.join(", ")}`, "error");
+      }
+    } catch (err: unknown) {
+      addProgress(err instanceof Error ? err.message : "Captcha update failed", "error");
+    } finally {
+      setCaptchaBusy(false);
+    }
   }
 
   const busy = globalBusy || busyZones.size > 0;
@@ -880,6 +944,56 @@ function ZonesSection({
                       cursor: "pointer", fontFamily: "inherit",
                     }}>Remove {selBound.length}</button>
                   )}
+                  {/* Captcha batch button — only for bound zones that support captcha */}
+                  {(() => {
+                    const captchaEligible = selList.filter((z) => z.bound && z.actions.includes("captcha"));
+                    if (captchaEligible.length === 0) return null;
+                    return (
+                      <div style={{ position: "relative" }}>
+                        <button
+                          onClick={() => setCaptchaDropdownOpen((o) => !o)}
+                          disabled={captchaBusy}
+                          style={{
+                            padding: "4px 10px", borderRadius: 4,
+                            border: `1px solid ${T.blueBd}`, background: T.blueBg,
+                            color: T.blue, fontSize: 10.5, fontWeight: 700,
+                            cursor: captchaBusy ? "not-allowed" : "pointer", fontFamily: "inherit",
+                            display: "flex", alignItems: "center", gap: 4,
+                          }}
+                        >
+                          {captchaBusy ? <Spinner size={9} color={T.blue} /> : null}
+                          Captcha ▾
+                        </button>
+                        {captchaDropdownOpen && (
+                          <div style={{
+                            position: "absolute", top: "calc(100% + 4px)", right: 0, zIndex: 50,
+                            background: T.surface, border: `1px solid ${T.border}`, borderRadius: 6,
+                            boxShadow: "0 4px 16px rgba(20,24,32,0.10)", minWidth: 160, overflow: "hidden",
+                          }}>
+                            {(["disabled", "managed", "non-interactive", "invisible"] as const).map((mode) => (
+                              <button
+                                key={mode}
+                                onClick={() => execCaptcha(mode)}
+                                style={{
+                                  width: "100%", padding: "7px 12px", textAlign: "left",
+                                  background: "none", border: "none", borderBottom: `1px solid ${T.border}`,
+                                  fontSize: 11, color: mode === "disabled" ? T.red : T.textMid,
+                                  fontWeight: 600, cursor: "pointer", fontFamily: "inherit",
+                                  display: "flex", alignItems: "center", gap: 6,
+                                }}
+                                onMouseEnter={(e) => { e.currentTarget.style.background = T.panelAlt; }}
+                                onMouseLeave={(e) => { e.currentTarget.style.background = "none"; }}
+                              >
+                                {mode === "disabled" ? "✕ Disable" :
+                                 mode === "managed" ? "● Managed" :
+                                 mode === "non-interactive" ? "◎ Non-interactive" : "○ Invisible"}
+                              </button>
+                            ))}
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })()}
                   <button onClick={() => setSelected(new Set())} style={{
                     background: "none", border: "none", color: T.textMute, cursor: "pointer", fontSize: 12, padding: 0,
                   }}>✕</button>
@@ -910,6 +1024,7 @@ function ZonesSection({
                         key={zone.zoneId} zone={zone}
                         selected={selected.has(zone.zoneId)}
                         busy={busyZones.has(zone.zoneId)}
+                        captchaActive={captchaMap.has(zone.zoneId)}
                         onToggle={() => toggleZone(zone.zoneId)}
                         onInstall={() => requestBind([zone])}
                         onRemove={() => setModal({ op: "unbind", zones: [zone] })}
@@ -1001,10 +1116,29 @@ export function InstallerPage() {
     if (!token.trim()) return;
     setZonesLoading(true);
     fetch("/status", { headers: { Authorization: `Bearer ${token.trim()}` } })
-      .then((r) => r.json() as Promise<{ accounts?: Array<{ zones: ZoneStatus[] }> }>)
-      .then((d) => setZones((d.accounts ?? []).flatMap((a) => a.zones)))
+      .then((r) => r.json() as Promise<{ accounts?: Array<AccountStatus> }>)
+      .then((d) => {
+        const accounts = d.accounts ?? [];
+        setInstalledAccountId(accounts[0]?.accountId ?? null);
+        setZones(accounts.flatMap((a) => a.zones));
+      })
       .catch(() => setZones([]))
       .finally(() => setZonesLoading(false));
+  }
+
+  function handleWorkersChange(installed: boolean) {
+    setWorkersInstalled(installed);
+    if (installed) {
+      setInstalledLapiUrl("loading");
+      fetch("/worker-settings", { headers: { Authorization: `Bearer ${token.trim()}` } })
+        .then((r) => r.json() as Promise<{ lapiUrl?: string | null }>)
+        .then((s) => setInstalledLapiUrl(s.lapiUrl ?? null))
+        .catch(() => setInstalledLapiUrl(null));
+    } else {
+      setInstalledLapiUrl(null);
+      setCsUrl("");
+      setCsKey("");
+    }
   }
 
   function handleChange(val: string) {
@@ -1086,7 +1220,7 @@ export function InstallerPage() {
             workersInstalled={workersInstalled}
             token={token} csUrl={csUrl} csKey={csKey}
             onRefresh={refreshZones}
-            onWorkersChange={setWorkersInstalled}
+            onWorkersChange={handleWorkersChange}
           />
         </div>
 

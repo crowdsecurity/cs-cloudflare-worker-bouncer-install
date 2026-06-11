@@ -33,6 +33,47 @@ export async function createTurnstileWidgets(
 }
 
 /**
+ * Create a single Turnstile widget for one domain. Returns null on failure.
+ */
+export async function createTurnstileWidgetForDomain(
+  client: CloudflareClient,
+  accountId: string,
+  domain: string,
+  mode: 'managed' | 'non-interactive' | 'invisible',
+): Promise<TurnstileWidgetState | null> {
+  try {
+    const response = await client.turnstile.widgets.create({
+      account_id: accountId,
+      name: RESOURCE_NAMES.TURNSTILE_WIDGET,
+      domains: [domain],
+      mode,
+    });
+    return { siteKey: response.sitekey, secret: response.secret };
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Delete the Turnstile widget for a specific domain (matched by domain list).
+ */
+export async function deleteTurnstileWidgetForDomain(
+  client: CloudflareClient,
+  accountId: string,
+  domain: string,
+): Promise<void> {
+  for await (const widget of client.turnstile.widgets.list({ account_id: accountId })) {
+    if (
+      widget.name === RESOURCE_NAMES.TURNSTILE_WIDGET &&
+      (widget.domains ?? []).includes(domain)
+    ) {
+      await client.turnstile.widgets.delete(widget.sitekey, { account_id: accountId });
+      return;
+    }
+  }
+}
+
+/**
  * Delete all Turnstile widgets created by the bouncer
  */
 export async function deleteTurnstileWidgets(
