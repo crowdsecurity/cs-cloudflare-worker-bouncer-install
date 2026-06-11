@@ -962,7 +962,7 @@ function ZonesSection({
                           }}
                         >
                           {captchaBusy ? <Spinner size={9} color={T.blue} /> : null}
-                          Captcha ▾
+                          Set Captcha ▾
                         </button>
                         {captchaDropdownOpen && (
                           <div style={{
