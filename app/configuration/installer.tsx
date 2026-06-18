@@ -138,19 +138,24 @@ function Spinner({ size = 10, color = T.textMute }: { size?: number; color?: str
 // ─── Fail-open indicator ──────────────────────────────────────────────────────
 
 function FailOpenIndicator({ failOpen }: { failOpen: boolean | null }) {
-  const [hovered, setHovered] = useState(false);
+  const [pos, setPos] = useState<{ top: number; left: number } | null>(null);
   if (failOpen === null) return null;
 
   const isOpen = failOpen === true;
-  const color  = isOpen ? T.green : T.red;
+  const color   = isOpen ? T.green : T.red;
   const bgColor = isOpen ? T.greenBg : T.redBg;
   const bdColor = isOpen ? T.greenBd : T.redBd;
 
+  function handleEnter(e: React.MouseEvent<HTMLSpanElement>) {
+    const r = e.currentTarget.getBoundingClientRect();
+    setPos({ top: r.bottom + 6, left: r.left + r.width / 2 });
+  }
+
   return (
     <span
-      style={{ position: "relative", display: "inline-flex", alignItems: "center" }}
-      onMouseEnter={() => setHovered(true)}
-      onMouseLeave={() => setHovered(false)}
+      style={{ display: "inline-flex", alignItems: "center" }}
+      onMouseEnter={handleEnter}
+      onMouseLeave={() => setPos(null)}
     >
       <span style={{
         width: 14, height: 14, borderRadius: "50%", cursor: "default",
@@ -159,17 +164,25 @@ function FailOpenIndicator({ failOpen }: { failOpen: boolean | null }) {
         fontSize: 8.5, fontWeight: 900, color, flexShrink: 0,
         lineHeight: 1,
       }}>i</span>
-      {hovered && (
+      {pos && (
         <div style={{
-          position: "absolute", left: "50%", bottom: "calc(100% + 6px)",
-          transform: "translateX(-50%)", zIndex: 100,
+          position: "fixed", top: pos.top, left: pos.left,
+          transform: "translateX(-50%)", zIndex: 9999,
           background: T.text, color: "#fff", borderRadius: 5,
           padding: "7px 10px", fontSize: 10.5, lineHeight: 1.5,
           width: 220, boxShadow: "0 4px 16px rgba(20,24,32,0.22)",
           pointerEvents: "none",
         }}>
+          {/* Arrow pointing up */}
+          <div style={{
+            position: "absolute", top: -5, left: "50%", transform: "translateX(-50%)",
+            width: 0, height: 0,
+            borderLeft: "5px solid transparent",
+            borderRight: "5px solid transparent",
+            borderBottom: `5px solid ${T.text}`,
+          }} />
           <div style={{ fontWeight: 700, marginBottom: 3 }}>
-            {isOpen ? "✓ Fail-open (recommended)" : "✗ Fail-closed"}
+            {isOpen ? "✓ Fail-Mode is Open (recommended)" : "✗ Fail-Mode is Closed"}
           </div>
           <div style={{ color: "rgba(255,255,255,0.75)" }}>
             When the Worker hits its CPU limit, traffic is{" "}
@@ -177,14 +190,6 @@ function FailOpenIndicator({ failOpen }: { failOpen: boolean | null }) {
               ? "allowed through — your site stays up."
               : "blocked. Setting fail-open is recommended so your site stays available if the worker is rate-limited."}
           </div>
-          {/* Arrow */}
-          <div style={{
-            position: "absolute", bottom: -5, left: "50%", transform: "translateX(-50%)",
-            width: 0, height: 0,
-            borderLeft: "5px solid transparent",
-            borderRight: "5px solid transparent",
-            borderTop: `5px solid ${T.text}`,
-          }} />
         </div>
       )}
     </span>
@@ -1028,8 +1033,8 @@ function ZonesSection({
                       cursor: "pointer", fontFamily: "inherit",
                     }}>Remove {selBound.length}</button>
                   )}
-                  {/* Fail-open batch button — only for bound zones */}
-                  {selBound.length > 0 && (
+                  {/* Fail-open batch button — only when at least one bound zone isn't already fail-open */}
+                  {selBound.length > 0 && selBound.some((z) => z.failOpen !== true) && (
                     <button
                       onClick={() => execFailOpen(true)}
                       disabled={failOpenBusy}
