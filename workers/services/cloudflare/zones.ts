@@ -14,8 +14,11 @@ export interface ZoneProtectionStatus {
   kvId: string | null;
   turnstileWidgetId: string | null;
   routesToProtect: string[];
+  routeIds: string[];
   actions: string[];
   defaultAction: string;
+  /** null = not bound / unknown; true/false = read from request_limit_fail_open */
+  failOpen: boolean | null;
 }
 
 export interface AccountStatus {
@@ -70,11 +73,16 @@ export async function detectProtectionStatus(
         // Check if the main bouncer route is bound to this zone
         let bound = false;
         const routesToProtect: string[] = [];
+        const routeIds: string[] = [];
+        let failOpen: boolean | null = null;
         try {
           for await (const route of client.workers.routes.list({ zone_id: zone.id })) {
             if (route.script === RESOURCE_NAMES.MAIN_WORKER) {
               bound = true;
               routesToProtect.push(route.pattern);
+              routeIds.push(route.id);
+              const fo = (route as Record<string, unknown>).request_limit_fail_open;
+              if (typeof fo === 'boolean') failOpen = fo;
             }
           }
         } catch { /* skip */ }
@@ -88,8 +96,10 @@ export async function detectProtectionStatus(
           kvId,
           turnstileWidgetId: turnstileByDomain.get(zone.name) ?? null,
           routesToProtect: routesToProtect.length > 0 ? routesToProtect : [`*${zone.name}/*`],
+          routeIds,
           actions: [...DefaultValues.ACTIONS],
           defaultAction: DefaultValues.DEFAULT_ACTION,
+          failOpen: bound ? failOpen : null,
         });
       }
     } catch { /* skip */ }

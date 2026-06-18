@@ -18,7 +18,7 @@ import {
 	createCronTrigger,
 	deleteWorkerScripts,
 } from "./services/cloudflare/workers.js";
-import { createWorkerRoutes, deleteWorkerRoutes } from "./services/cloudflare/routes.js";
+import { createWorkerRoutes, deleteWorkerRoutes, setFailOpen } from "./services/cloudflare/routes.js";
 import {
 	createTurnstileWidgets,
 	deleteTurnstileWidgets,
@@ -306,6 +306,32 @@ app.patch("/turnstile-config", async (c) => {
 		await updateTurnstileConfig(client, body.accountId, kvId, kvUpdates);
 
 		return c.json({ ok: true, ...(errors.length > 0 && { failed: errors }) });
+	} catch (err: unknown) {
+		return c.json({ error: extractErrorMessage(err) }, 400);
+	}
+});
+
+app.patch("/fail-open", async (c) => {
+	const token = extractToken(c.req.header("Authorization"));
+	if (!token) return c.json({ error: "Missing API Token" }, 401);
+
+	const body = await c.req.json<{
+		failOpen: boolean;
+		zones: Array<{ zoneId: string; routesToProtect: string[] }>;
+	}>();
+	if (typeof body.failOpen !== "boolean" || !Array.isArray(body.zones) || body.zones.length === 0) {
+		return c.json({ error: "Missing failOpen or zones" }, 400);
+	}
+
+	try {
+		const client = createCloudflareClient(token);
+		await setFailOpen(
+			client,
+			body.zones.map((z) => ({ id: z.zoneId, routesToProtect: z.routesToProtect })),
+			RESOURCE_NAMES.MAIN_WORKER,
+			body.failOpen,
+		);
+		return c.json({ ok: true });
 	} catch (err: unknown) {
 		return c.json({ error: extractErrorMessage(err) }, 400);
 	}
