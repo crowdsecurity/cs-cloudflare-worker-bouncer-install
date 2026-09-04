@@ -246,16 +246,18 @@ app.patch("/crowdsec-credentials", async (c) => {
 	try {
 		const client = createCloudflareClient(token);
 
-		const updated = await updateSyncWorkerCredentials(client, body.accountId, body.lapiUrl, body.lapiKey);
-		if (!updated) return c.json({ error: "Sync worker not found — deploy first" }, 404);
-
-		// Find the KV namespace and signal a reset so the sync worker re-fetches
-		// all decisions from the new LAPI on its next cron run.
+		// Find the KV namespace first — needed both to pass the full binding set
+		// to updateSyncWorkerCredentials and to signal a KV reset afterward.
 		let kvId: string | null = null;
 		for await (const ns of client.kv.namespaces.list({ account_id: body.accountId })) {
 			if (ns.title === RESOURCE_NAMES.KV_NAMESPACE) { kvId = ns.id; break; }
 		}
-		if (kvId) await signalKVReset(client, body.accountId, kvId);
+		if (!kvId) return c.json({ error: "KV namespace not found — deploy first" }, 404);
+
+		const updated = await updateSyncWorkerCredentials(client, body.accountId, kvId, token, body.lapiUrl, body.lapiKey);
+		if (!updated) return c.json({ error: "Sync worker not found — deploy first" }, 404);
+
+		await signalKVReset(client, body.accountId, kvId);
 
 		return c.json({ ok: true });
 	} catch (err: unknown) {
