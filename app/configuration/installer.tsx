@@ -325,6 +325,10 @@ function CrowdSecSection({
 
   async function handleUpdateNow() {
     if (!isDirty || !accountId) return;
+    try { new URL(url.trim()); } catch {
+      setUpdateError("Invalid URL — expected format: https://your-lapi.example.com");
+      return;
+    }
     setUpdateStatus("saving");
     setUpdateError(null);
     try {
@@ -410,6 +414,14 @@ function CrowdSecSection({
                 <input
                   value={url}
                   onChange={(e) => setUrl((e.target as HTMLInputElement).value)}
+                  onBlur={(e) => {
+                    let v = (e.target as HTMLInputElement).value.trim();
+                    if (!v) return;
+                    if (!v.startsWith("http://") && !v.startsWith("https://")) v = "https://" + v;
+                    setUrl(v);
+                    try { new URL(v); setUpdateError(null); }
+                    catch { setUpdateError("Invalid URL — expected format: https://your-lapi.example.com"); }
+                  }}
                   placeholder="https://your-lapi.example.com"
                   style={inputStyle}
                 />

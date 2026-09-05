@@ -155,10 +155,15 @@ export async function uploadDecisionsSyncWorker(
 /**
  * Update LAPI_URL and LAPI_KEY on an already-deployed sync worker without
  * re-uploading the script. Returns false if the worker does not exist.
+ *
+ * NOTE: scriptAndVersionSettings.edit replaces ALL bindings, so we must
+ * include the full set to avoid dropping KV namespace, CF_ACCOUNT_ID, etc.
  */
 export async function updateSyncWorkerCredentials(
   client: CloudflareClient,
   accountId: string,
+  kvNamespaceId: string,
+  cfApiToken: string,
   lapiUrl: string,
   lapiKey: string,
 ): Promise<boolean> {
@@ -167,8 +172,12 @@ export async function updateSyncWorkerCredentials(
       account_id: accountId,
       settings: {
         bindings: [
+          { type: 'kv_namespace', name: RESOURCE_NAMES.KV_NAMESPACE, namespace_id: kvNamespaceId },
           { type: 'plain_text', name: 'LAPI_URL', text: lapiUrl },
           { type: 'secret_text', name: 'LAPI_KEY', text: lapiKey },
+          { type: 'plain_text', name: 'CF_ACCOUNT_ID', text: accountId },
+          { type: 'plain_text', name: 'CF_KV_NAMESPACE_ID', text: kvNamespaceId },
+          { type: 'secret_text', name: 'CF_API_TOKEN', text: cfApiToken },
         ],
       },
     });
