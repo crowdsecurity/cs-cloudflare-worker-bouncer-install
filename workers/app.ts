@@ -1,6 +1,6 @@
 import { Hono } from "hono";
-import { upgradeWebSocket } from "hono/cloudflare-workers";
-import { createRequestHandler } from "react-router";
+import { setupWs } from "#ws-adapter";
+import { setupFallback } from "#fallback-handler";
 import { createCloudflareClient, extractErrorMessage } from "./services/cloudflare/client.js";
 import { detectProtectionStatus } from "./services/cloudflare/zones.js";
 import {
@@ -40,6 +40,13 @@ import type { L3AccountStatus, ConsistencyCheckResult } from "./services/cloudfl
 import { RESOURCE_NAMES, DEFAULTS, L3_BINDING_NAMES, type ZoneState, type CloudflareClient } from "./services/cloudflare/types.js";
 
 const app = new Hono();
+
+// WS upgrade mechanics differ by runtime (Workers has a native upgrade,
+// plain Node needs to hook the http.Server's 'upgrade' event) — see
+// workers/ws-adapter.{cloudflare,node}.ts. `afterListen` is a no-op on
+// Workers; the Node entrypoint (workers/server.node.ts) calls it once
+// listening has started.
+const { upgradeWebSocket, afterListen } = setupWs(app);
 
 function extractToken(authHeader: string | undefined): string | null {
 	return authHeader?.startsWith("Bearer ") ? authHeader.slice(7) : null;
@@ -726,16 +733,11 @@ app.get("/ws", upgradeWebSocket(() => ({
 	},
 })));
 
-// ─── React Router fallthrough ─────────────────────────────────────────────────
+// ─── Fallthrough ──────────────────────────────────────────────────────────────
+// Renders via React Router SSR on Cloudflare, serves the pre-built static
+// SPA on Node — see workers/fallback-handler.{cloudflare,node}.ts.
 
-app.get("*", (c) => {
-	const requestHandler = createRequestHandler(
-		() => import("virtual:react-router/server-build"),
-		import.meta.env.MODE,
-	);
-	return requestHandler(c.req.raw, {
-		cloudflare: { env: c.env, ctx: c.executionCtx },
-	});
-});
+setupFallback(app);
 
 export default app;
+export { afterListen };
