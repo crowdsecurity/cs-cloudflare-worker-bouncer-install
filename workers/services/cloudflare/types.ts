@@ -62,6 +62,23 @@ export const RESOURCE_NAMES = {
   TURNSTILE_WIDGET: 'crowdsec-cloudflare-worker-bouncer-widget',
   BAN_TEMPLATE_KEY: 'BAN_TEMPLATE',
   TURNSTILE_CONFIG_KEY: 'TURNSTILE_CONFIG',
+
+  // Layer 3 (IP Lists) resources — independent from the Layer 7 stack above
+  L3_SYNC_WORKER: 'crowdsec-decisions-l3-sync-worker',
+  L3_KV_NAMESPACE: 'CROWDSECCFBOUNCERNS-L3',
+  L3_D1_DATABASE: 'crowdsec-bouncer',
+} as const;
+
+// JS binding variable names the L3 sync worker bundle expects (hardcoded in
+// its code, not configurable). The KV binding intentionally shares its name
+// with the L7 worker's KV binding — they're different Cloudflare resources
+// bound to two different worker scripts, so there's no collision.
+export const L3_BINDING_NAMES = {
+  KV_BINDING: 'CROWDSECCFBOUNCERNS',
+  D1_BINDING: 'LIST_STATE_DB',
+  SYNC_MODE_FLAG: 'SYNC_TO_LIST_NOT_KV',
+  IP_LIST_PREFIX: 'IP_LIST_PREFIX',
+  IP_LIST_BATCH_SIZE: 'IP_LIST_BATCH_SIZE',
 } as const;
 
 // Default values
@@ -74,6 +91,11 @@ export const DEFAULTS = {
     enabled: true,
     mode: 'managed' as const,
   },
+
+  // Layer 3 defaults (installer UI defaults — the worker's own internal
+  // fallback for batch size, 1000, only applies if the binding is absent)
+  IP_LIST_PREFIX: 'crowdsec_',
+  IP_LIST_BATCH_SIZE: 10000,
 } as const;
 
 // Type for the Cloudflare client
