@@ -13,6 +13,8 @@
 		"publish": true
 	},
 	"dependencies": {
+		"@hono/node-server": "^1.19.17",
+		"@hono/node-ws": "^1.3.1",
 		"cloudflare": "^5.2.0",
 		"hono": "4.11.1",
 		"isbot": "5.1.32",
@@ -28,6 +30,7 @@
 		"@types/node": "^24.10.1",
 		"@types/react": "19.2.7",
 		"@types/react-dom": "19.2.3",
+		"esbuild": "^0.25.12",
 		"tailwindcss": "4.1.17",
 		"typescript": "5.9.3",
 		"vite": "^6.0.0",
@@ -36,12 +39,30 @@
 	},
 	"private": true,
 	"type": "module",
+	"engines": {
+		"node": ">=20.0.0"
+	},
+	"imports": {
+		"#ws-adapter": {
+			"workerd": "./workers/ws-adapter.cloudflare.ts",
+			"default": "./workers/ws-adapter.node.ts"
+		},
+		"#fallback-handler": {
+			"workerd": "./workers/fallback-handler.cloudflare.ts",
+			"default": "./workers/fallback-handler.node.ts"
+		}
+	},
 	"scripts": {
 		"build": "react-router build",
 		"cf-typegen": "wrangler types",
 		"deploy": "npm run build && wrangler deploy",
 		"dev": "react-router dev",
 		"preview": "npm run build && vite preview",
-		"typecheck": "npm run cf-typegen && react-router typegen && tsc -b"
+		"typecheck": "npm run cf-typegen && react-router typegen && tsc -b",
+		"dev:node": "BUILD_TARGET=node react-router dev --config vite.config.node.ts",
+		"build:node:client": "BUILD_TARGET=node react-router build --config vite.config.node.ts",
+		"build:node:server": "esbuild workers/server.node.ts --bundle --platform=node --format=esm --packages=external --outfile=build-node/server.js",
+		"build:node": "npm run build:node:client && npm run build:node:server",
+		"start:node": "node build-node/server.js"
 	}
 }

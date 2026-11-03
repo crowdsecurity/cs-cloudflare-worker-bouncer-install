@@ -2,6 +2,7 @@ import { toFile } from 'cloudflare';
 import {
   RESOURCE_NAMES,
   DEFAULTS,
+  L3_BINDING_NAMES,
   type CloudflareClient,
   type ZoneState,
 } from './types.js';
@@ -13,7 +14,9 @@ type WorkerBinding =
   | { type: 'kv_namespace'; name: string; namespace_id: string }
   | { type: 'analytics_engine'; name: string; dataset: string }
   | { type: 'plain_text'; name: string; text: string }
-  | { type: 'secret_text'; name: string; text: string };
+  | { type: 'secret_text'; name: string; text: string }
+  | { type: 'd1'; name: string; id: string }
+  | { type: 'inherit'; name: string };
 
 /**
  * Upload the main bouncer worker
@@ -153,19 +156,21 @@ export async function uploadDecisionsSyncWorker(
 }
 
 /**
- * Update LAPI_URL and LAPI_KEY on an already-deployed sync worker without
+ * Update LAPI_URL and/or LAPI_KEY on an already-deployed sync worker without
  * re-uploading the script. Returns false if the worker does not exist.
  *
- * NOTE: scriptAndVersionSettings.edit replaces ALL bindings, so we must
- * include the full set to avoid dropping KV namespace, CF_ACCOUNT_ID, etc.
+ * NOTE: scriptAndVersionSettings.edit replaces ALL bindings in one call, so
+ * every binding not being changed here is sent as `{type: 'inherit'}` —
+ * carrying its value over from the worker's current version unchanged —
+ * rather than being dropped or overwritten with a stale/placeholder value.
+ * Only pass `lapiUrl`/`lapiKey` for fields the caller actually wants to change.
  */
 export async function updateSyncWorkerCredentials(
   client: CloudflareClient,
   accountId: string,
   kvNamespaceId: string,
   cfApiToken: string,
-  lapiUrl: string,
-  lapiKey: string,
+  changes: { lapiUrl?: string; lapiKey?: string },
 ): Promise<boolean> {
   try {
     await client.workers.scripts.scriptAndVersionSettings.edit(RESOURCE_NAMES.SYNC_WORKER, {
@@ -173,11 +178,130 @@ export async function updateSyncWorkerCredentials(
       settings: {
         bindings: [
           { type: 'kv_namespace', name: RESOURCE_NAMES.KV_NAMESPACE, namespace_id: kvNamespaceId },
-          { type: 'plain_text', name: 'LAPI_URL', text: lapiUrl },
-          { type: 'secret_text', name: 'LAPI_KEY', text: lapiKey },
+          changes.lapiUrl !== undefined
+            ? { type: 'plain_text', name: 'LAPI_URL', text: changes.lapiUrl }
+            : { type: 'inherit', name: 'LAPI_URL' },
+          changes.lapiKey !== undefined
+            ? { type: 'secret_text', name: 'LAPI_KEY', text: changes.lapiKey }
+            : { type: 'inherit', name: 'LAPI_KEY' },
           { type: 'plain_text', name: 'CF_ACCOUNT_ID', text: accountId },
           { type: 'plain_text', name: 'CF_KV_NAMESPACE_ID', text: kvNamespaceId },
           { type: 'secret_text', name: 'CF_API_TOKEN', text: cfApiToken },
+        ],
+      },
+    });
+    return true;
+  } catch (err) {
+    if (isNotFoundError(err)) return false;
+    throw err;
+  }
+}
+
+/**
+ * Build the full binding set for the Layer 3 (IP Lists) sync worker. Shared
+ * between upload and settings-update since scriptAndVersionSettings.edit
+ * replaces ALL bindings at once.
+ */
+function buildL3Bindings(
+  accountId: string,
+  kvNamespaceId: string,
+  d1DatabaseId: string,
+  lapiUrl: string,
+  lapiKey: string,
+  cfApiToken: string,
+  ipListPrefix: string,
+  ipListBatchSize: number,
+): WorkerBinding[] {
+  return [
+    { type: 'kv_namespace', name: L3_BINDING_NAMES.KV_BINDING, namespace_id: kvNamespaceId },
+    { type: 'plain_text', name: 'LAPI_URL', text: lapiUrl },
+    { type: 'secret_text', name: 'LAPI_KEY', text: lapiKey },
+    { type: 'plain_text', name: 'CF_ACCOUNT_ID', text: accountId },
+    { type: 'secret_text', name: 'CF_API_TOKEN', text: cfApiToken },
+    { type: 'plain_text', name: L3_BINDING_NAMES.SYNC_MODE_FLAG, text: 'true' },
+    { type: 'd1', name: L3_BINDING_NAMES.D1_BINDING, id: d1DatabaseId },
+    { type: 'plain_text', name: L3_BINDING_NAMES.IP_LIST_PREFIX, text: ipListPrefix },
+    { type: 'plain_text', name: L3_BINDING_NAMES.IP_LIST_BATCH_SIZE, text: String(ipListBatchSize) },
+  ];
+}
+
+/**
+ * Upload the Layer 3 (IP Lists) decisions sync worker. Independent script
+ * from the Layer 7 sync worker — see RESOURCE_NAMES.L3_SYNC_WORKER.
+ */
+export async function uploadL3SyncWorker(
+  client: CloudflareClient,
+  accountId: string,
+  scriptName: string,
+  kvNamespaceId: string,
+  d1DatabaseId: string,
+  lapiUrl: string,
+  lapiKey: string,
+  cfApiToken: string,
+  ipListPrefix: string,
+  ipListBatchSize: number,
+): Promise<void> {
+  const bindings = buildL3Bindings(
+    accountId, kvNamespaceId, d1DatabaseId, lapiUrl, lapiKey, cfApiToken, ipListPrefix, ipListBatchSize,
+  );
+
+  const workerFile = await toFile(
+    new Blob([getDecisionsSyncWorkerScript()], { type: 'application/javascript+module' }),
+    'worker.js',
+    { type: 'application/javascript+module' }
+  );
+
+  await client.workers.scripts.update(scriptName, {
+    account_id: accountId,
+    metadata: {
+      main_module: 'worker.js',
+      compatibility_date: '2024-01-01',
+      bindings,
+    },
+    files: [workerFile],
+  });
+}
+
+/**
+ * Update settings (LAPI url/key, list prefix, batch size) on an
+ * already-deployed Layer 3 sync worker without re-uploading the script.
+ * Returns false if the worker does not exist.
+ *
+ * NOTE: scriptAndVersionSettings.edit replaces ALL bindings in one call, so
+ * every binding not present in `changes` is sent as `{type: 'inherit'}` —
+ * carrying its value over from the worker's current version unchanged.
+ * Only pass the fields the caller actually wants to change.
+ */
+export async function updateL3SyncWorkerSettings(
+  client: CloudflareClient,
+  accountId: string,
+  kvNamespaceId: string,
+  d1DatabaseId: string,
+  cfApiToken: string,
+  changes: { lapiUrl?: string; lapiKey?: string; ipListPrefix?: string; ipListBatchSize?: number },
+): Promise<boolean> {
+  try {
+    await client.workers.scripts.scriptAndVersionSettings.edit(RESOURCE_NAMES.L3_SYNC_WORKER, {
+      account_id: accountId,
+      settings: {
+        bindings: [
+          { type: 'kv_namespace', name: L3_BINDING_NAMES.KV_BINDING, namespace_id: kvNamespaceId },
+          changes.lapiUrl !== undefined
+            ? { type: 'plain_text', name: 'LAPI_URL', text: changes.lapiUrl }
+            : { type: 'inherit', name: 'LAPI_URL' },
+          changes.lapiKey !== undefined
+            ? { type: 'secret_text', name: 'LAPI_KEY', text: changes.lapiKey }
+            : { type: 'inherit', name: 'LAPI_KEY' },
+          { type: 'plain_text', name: 'CF_ACCOUNT_ID', text: accountId },
+          { type: 'secret_text', name: 'CF_API_TOKEN', text: cfApiToken },
+          { type: 'plain_text', name: L3_BINDING_NAMES.SYNC_MODE_FLAG, text: 'true' },
+          { type: 'd1', name: L3_BINDING_NAMES.D1_BINDING, id: d1DatabaseId },
+          changes.ipListPrefix !== undefined
+            ? { type: 'plain_text', name: L3_BINDING_NAMES.IP_LIST_PREFIX, text: changes.ipListPrefix }
+            : { type: 'inherit', name: L3_BINDING_NAMES.IP_LIST_PREFIX },
+          changes.ipListBatchSize !== undefined
+            ? { type: 'plain_text', name: L3_BINDING_NAMES.IP_LIST_BATCH_SIZE, text: String(changes.ipListBatchSize) }
+            : { type: 'inherit', name: L3_BINDING_NAMES.IP_LIST_BATCH_SIZE },
         ],
       },
     });

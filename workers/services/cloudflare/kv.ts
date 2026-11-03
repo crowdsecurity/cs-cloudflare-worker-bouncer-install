@@ -12,12 +12,27 @@ import { isNotFoundError } from './client.js';
 export async function createKVNamespace(
   client: CloudflareClient,
   accountId: string,
+  title: string = RESOURCE_NAMES.KV_NAMESPACE,
 ): Promise<string> {
   const response = await client.kv.namespaces.create({
     account_id: accountId,
-    title: RESOURCE_NAMES.KV_NAMESPACE,
+    title,
   });
   return response.id;
+}
+
+/**
+ * Find a KV namespace by title. Returns its id, or null if not found.
+ */
+export async function findKVNamespace(
+  client: CloudflareClient,
+  accountId: string,
+  title: string = RESOURCE_NAMES.KV_NAMESPACE,
+): Promise<string | null> {
+  for await (const ns of client.kv.namespaces.list({ account_id: accountId })) {
+    if (ns.title === title) return ns.id;
+  }
+  return null;
 }
 
 /**
@@ -150,10 +165,11 @@ export async function signalKVReset(
 export async function findAndDeleteKVNamespace(
   client: CloudflareClient,
   accountId: string,
+  title: string = RESOURCE_NAMES.KV_NAMESPACE,
 ): Promise<void> {
   try {
     for await (const ns of client.kv.namespaces.list({ account_id: accountId })) {
-      if (ns.title === RESOURCE_NAMES.KV_NAMESPACE) {
+      if (ns.title === title) {
         await client.kv.namespaces.delete(ns.id, { account_id: accountId });
       }
     }

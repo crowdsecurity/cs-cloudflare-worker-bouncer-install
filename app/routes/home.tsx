@@ -8,10 +8,6 @@ export function meta({}: Route.MetaArgs) {
 	];
 }
 
-export function loader({ context }: Route.LoaderArgs) {
-	return {};
-}
-
-export default function Home({ loaderData }: Route.ComponentProps) {
+export default function Home() {
 	return <InstallerPage />;
 }
